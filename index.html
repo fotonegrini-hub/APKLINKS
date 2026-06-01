@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-    <title>Gerenciador de Atalhos · Abas com Links (URLs ocultas)</title>
+    <title>Atalhos · Arraste entre abas + reordenar (URLs ocultas)</title>
     <style>
         * {
             margin: 0;
@@ -18,7 +18,6 @@
             min-height: 100vh;
         }
 
-        /* APP CONTAINER */
         .app {
             max-width: 1400px;
             margin: 0 auto;
@@ -43,7 +42,8 @@
             letter-spacing: -0.3px;
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 12px;
+            flex-wrap: wrap;
         }
 
         .global-header h1 small {
@@ -52,6 +52,18 @@
             padding: 2px 10px;
             border-radius: 40px;
             font-weight: normal;
+        }
+
+        /* NOVO: indicador de salvamento */
+        .save-badge {
+            background: #2dd4bf;
+            color: #0f172a;
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 4px 12px;
+            border-radius: 40px;
+            letter-spacing: 0.3px;
+            box-shadow: 0 0 0 1px #14b8a6;
         }
 
         .global-search-area {
@@ -148,6 +160,7 @@
             gap: 8px;
             transition: 0.2s;
             border-bottom: 2px solid transparent;
+            user-select: none;
         }
 
         .tab-btn.active {
@@ -168,6 +181,13 @@
             font-weight: bold;
         }
 
+        /* ABA DROP ZONE (para arrastar atalho) */
+        .tab-btn.drop-active {
+            background: #bfdbfe;
+            border: 1px dashed #2563eb;
+            transform: scale(1.02);
+        }
+
         /* CONTEÚDO DA ABA */
         .tab-content-pane {
             padding: 24px 28px;
@@ -175,7 +195,6 @@
             transition: 0.1s;
         }
 
-        /* CABEÇALHO DA ABA (controles) */
         .tab-header-actions {
             display: flex;
             justify-content: space-between;
@@ -224,7 +243,6 @@
             background: #fee2e2;
         }
 
-        /* LISTA DE ATALHOS (agora sem mostrar URL) */
         .shortcuts-section {
             width: 100%;
         }
@@ -246,10 +264,13 @@
             margin: 20px 0;
             max-height: 500px;
             overflow-y: auto;
-            padding-right: 5px;
+            padding: 4px 2px;
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
             gap: 10px;
+            min-height: 120px;
+            background: #ffffff;
+            border-radius: 20px;
         }
 
         .shortcut-item {
@@ -261,6 +282,15 @@
             padding: 8px 12px 8px 20px;
             transition: 0.1s;
             border: 1px solid #eef2ff;
+            cursor: grab;
+            user-select: none;
+        }
+        .shortcut-item:active {
+            cursor: grabbing;
+        }
+        .shortcut-item.dragging {
+            opacity: 0.4;
+            cursor: grabbing;
         }
 
         .shortcut-item:hover {
@@ -280,7 +310,6 @@
             overflow: hidden;
         }
 
-        /* apenas o nome visível, sem qualquer indicação de URL */
         .shortcut-link strong {
             font-size: 1rem;
             white-space: nowrap;
@@ -288,8 +317,6 @@
             text-overflow: ellipsis;
             max-width: 200px;
         }
-
-        /* nenhum span com URL é mostrado */
 
         .item-actions {
             display: flex;
@@ -315,7 +342,6 @@
             color: #3b82f6;
         }
 
-        /* FORM ADICIONAR ATALHO */
         .add-shortcut-form {
             margin-top: 24px;
             background: #f1f5f9;
@@ -365,6 +391,16 @@
             transform: scale(0.96);
         }
 
+        /* destaque de drop */
+        .shortcut-item.drop-before {
+            border-top: 3px solid #3b82f6;
+            border-radius: 8px;
+        }
+        .shortcut-item.drop-after {
+            border-bottom: 3px solid #3b82f6;
+            border-radius: 8px;
+        }
+
         @media (max-width: 750px) {
             .tab-content-pane {
                 padding: 16px;
@@ -378,7 +414,11 @@
 <body>
 <div class="app">
     <div class="global-header">
-        <h1>📌 Meus Atalhos <small>clique → abre em nova aba (URL oculta)</small></h1>
+        <h1>
+            📌 Meus Atalhos 
+            <small>arraste para reordenar ou mover abas</small>
+            <span class="save-badge">✅ salvo DN LINK</span>
+        </h1>
         <div class="global-search-area">
             <input type="text" id="globalSearchInput" placeholder="🔍 Buscar em TODOS os atalhos (por nome ou url) ..." autocomplete="off">
             <div id="globalResults" class="global-results"></div>
@@ -392,16 +432,21 @@
 
 <script>
     // ---------- ESTRUTURA DE DADOS ----------
-    let abas = [];          // cada aba: { id, nome, shortcuts: [{ id, nome, url }] }
+    let abas = [];
     let activeTabId = null;
-    let tabFilters = {};    // guarda texto de filtro por id da aba
+    let tabFilters = {};
 
-    // IDs
+    // Drag & drop globais
+    let dragSource = {
+        abaId: null,
+        shortcutId: null,
+        indexOrigem: null
+    };
+
     function gerarId() {
         return Date.now() + '-' + Math.random().toString(36).substr(2, 6);
     }
 
-    // Carregar / salvar localStorage (sem iframe)
     function salvarDados() {
         const dados = {
             abas: abas.map(aba => ({
@@ -412,13 +457,12 @@
             activeTabId: activeTabId,
             tabFilters: tabFilters
         };
-        localStorage.setItem('app_abas_atalhos_oculto', JSON.stringify(dados));
+        localStorage.setItem('app_abas_dragdrop', JSON.stringify(dados));
     }
 
     function carregarDados() {
-        const raw = localStorage.getItem('app_abas_atalhos_oculto');
+        const raw = localStorage.getItem('app_abas_dragdrop');
         if (!raw) {
-            // Dados iniciais: Principal + exemplo Trabalho
             const abaPrincipal = {
                 id: gerarId(),
                 nome: '🌟 Principal',
@@ -450,13 +494,10 @@
         } catch(e) { console.warn(e); }
     }
 
-    // ---------- HELPERS ----------
     function normalizarUrl(url) {
         let trimmed = url.trim();
         if (!trimmed) return null;
-        if (!/^https?:\/\//i.test(trimmed)) {
-            return 'https://' + trimmed;
-        }
+        if (!/^https?:\/\//i.test(trimmed)) return 'https://' + trimmed;
         return trimmed;
     }
 
@@ -465,11 +506,7 @@
         if (!aba) return false;
         const url = normalizarUrl(urlRaw);
         if (!nome.trim() || !url) return false;
-        aba.shortcuts.push({
-            id: gerarId(),
-            nome: nome.trim(),
-            url: url
-        });
+        aba.shortcuts.push({ id: gerarId(), nome: nome.trim(), url: url });
         salvarDados();
         renderizarInterface();
         return true;
@@ -506,16 +543,11 @@
     }
 
     function deletarAba(abaId) {
-        if (abas.length === 1) {
-            alert("Você precisa manter pelo menos uma aba principal!");
-            return;
-        }
+        if (abas.length === 1) { alert("Mantenha pelo menos uma aba!"); return; }
         const index = abas.findIndex(a => a.id === abaId);
         if (index !== -1) {
             abas.splice(index, 1);
-            if (activeTabId === abaId) {
-                activeTabId = abas[0]?.id || null;
-            }
+            if (activeTabId === abaId) activeTabId = abas[0]?.id || null;
             delete tabFilters[abaId];
             salvarDados();
             renderizarInterface();
@@ -534,10 +566,36 @@
         renderizarInterface();
     }
 
-    // ---------- RENDER PRINCIPAL ----------
+    // ---------- MOVER ATALHO (arrastar) ----------
+    function moverAtalhoParaAba(atalhoId, origemAbaId, destinoAbaId, posicaoDestinoIndex = null) {
+        if (origemAbaId === destinoAbaId && posicaoDestinoIndex === undefined) return false;
+        const abaOrigem = abas.find(a => a.id === origemAbaId);
+        const abaDestino = abas.find(a => a.id === destinoAbaId);
+        if (!abaOrigem || !abaDestino) return false;
+
+        const atalhoIndex = abaOrigem.shortcuts.findIndex(s => s.id === atalhoId);
+        if (atalhoIndex === -1) return false;
+        const [atalho] = abaOrigem.shortcuts.splice(atalhoIndex, 1);
+
+        if (origemAbaId === destinoAbaId && typeof posicaoDestinoIndex === 'number') {
+            // reordenar na mesma aba
+            abaDestino.shortcuts.splice(posicaoDestinoIndex, 0, atalho);
+        } else {
+            // mover para outra aba: insere no final ou na posição especificada
+            if (typeof posicaoDestinoIndex === 'number' && posicaoDestinoIndex >= 0 && posicaoDestinoIndex <= abaDestino.shortcuts.length) {
+                abaDestino.shortcuts.splice(posicaoDestinoIndex, 0, atalho);
+            } else {
+                abaDestino.shortcuts.push(atalho);
+            }
+        }
+        salvarDados();
+        renderizarInterface();
+        return true;
+    }
+
+    // ----- RENDER ABAS E DRAG & DROP -----
     function renderizarAbasHeader() {
         const container = document.getElementById('tabsBar');
-        if (!container) return;
         container.innerHTML = '';
         abas.forEach(aba => {
             const btn = document.createElement('button');
@@ -549,6 +607,21 @@
                 salvarDados();
                 renderizarInterface();
             };
+            // DRAG OVER / DROP para mover atalhos para esta aba (solte sobre o botão)
+            btn.setAttribute('data-aba-id', aba.id);
+            btn.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                btn.classList.add('drop-active');
+            });
+            btn.addEventListener('dragleave', () => btn.classList.remove('drop-active'));
+            btn.addEventListener('drop', (e) => {
+                e.preventDefault();
+                btn.classList.remove('drop-active');
+                if (!dragSource.abaId || !dragSource.shortcutId) return;
+                // mover para o FINAL da aba destino
+                moverAtalhoParaAba(dragSource.shortcutId, dragSource.abaId, aba.id, null);
+                dragSource = { abaId: null, shortcutId: null, indexOrigem: null };
+            });
             container.appendChild(btn);
         });
         const addBtn = document.createElement('button');
@@ -558,47 +631,40 @@
         container.appendChild(addBtn);
     }
 
-    // Renderiza o conteúdo da aba ativa (somente atalhos com nome visível, URL oculta)
     function renderizarAbaAtivaConteudo() {
         const aba = abas.find(a => a.id === activeTabId);
         if (!aba) return;
 
         const container = document.getElementById('tabContentContainer');
-        if (!container) return;
-
         const filtroAtual = tabFilters[activeTabId] || '';
         let atalhosFiltrados = [...aba.shortcuts];
         if (filtroAtual.trim() !== '') {
             const term = filtroAtual.trim().toLowerCase();
-            atalhosFiltrados = atalhosFiltrados.filter(s =>
-                s.nome.toLowerCase().includes(term) || s.url.toLowerCase().includes(term)
-            );
+            atalhosFiltrados = atalhosFiltrados.filter(s => s.nome.toLowerCase().includes(term) || s.url.toLowerCase().includes(term));
         }
 
         const html = `
             <div class="tab-header-actions">
                 <div class="tab-title-area">
-                    <h2 id="tabNameDisplay">${escapeHtml(aba.nome)}</h2>
+                    <h2>${escapeHtml(aba.nome)}</h2>
                     <button class="edit-name-btn" id="renameTabBtn" title="Renomear aba">✏️</button>
                     <button class="delete-tab-btn" id="deleteTabBtn" title="Remover aba">🗑️</button>
                 </div>
-                <div style="font-size:12px; color:#475569;">✨ Clique em qualquer atalho → abre em nova aba (URL escondida)</div>
+                <div style="font-size:12px; color:#475569;">✨ Arraste atalhos: reordene na lista ou solte sobre outra aba (no botão da aba)</div>
             </div>
-
             <div class="shortcuts-section">
                 <div class="filter-shortcuts">
-                    <input type="text" id="filterShortcutsInput" placeholder="🔎 Filtrar atalhos desta aba (por nome ou URL oculta)" value="${escapeHtml(filtroAtual)}">
+                    <input type="text" id="filterShortcutsInput" placeholder="🔎 Filtrar atalhos (nome ou URL oculta)" value="${escapeHtml(filtroAtual)}">
                 </div>
-                <ul class="shortcuts-list" id="shortcutsList">
-                    ${atalhosFiltrados.length === 0 ? '<div class="empty-msg">📭 Nenhum atalho encontrado. Adicione abaixo.</div>' : 
-                        atalhosFiltrados.map(s => `
-                            <li class="shortcut-item" data-shortcut-id="${s.id}">
-                                <div class="shortcut-link" data-url="${escapeHtml(s.url)}" data-nome="${escapeHtml(s.nome)}">
+                <ul class="shortcuts-list" id="shortcutsList" data-aba-id="${aba.id}">
+                    ${atalhosFiltrados.length === 0 ? '<div class="empty-msg">📭 Nenhum atalho encontrado. Adicione abaixo ou arraste de outra aba.</div>' : 
+                        atalhosFiltrados.map((s, idx) => `
+                            <li class="shortcut-item" draggable="true" data-shortcut-id="${s.id}" data-original-index="${idx}">
+                                <div class="shortcut-link" data-url="${escapeHtml(s.url)}">
                                     <strong>🔗 ${escapeHtml(s.nome)}</strong>
-                                    <!-- URL completamente oculta, não exibida -->
                                 </div>
                                 <div class="item-actions">
-                                    <button class="open-newtab" title="Abrir em nova guia">📎</button>
+                                    <button class="open-newtab" title="Abrir em nova aba">📎</button>
                                     <button class="edit-shortcut" title="Editar">✏️</button>
                                     <button class="delete-shortcut" title="Remover">❌</button>
                                 </div>
@@ -609,7 +675,7 @@
                 <div class="add-shortcut-form">
                     <h4>➕ Adicionar novo atalho a esta aba</h4>
                     <div class="form-row">
-                        <input type="text" id="newShortcutNome" placeholder="Nome do atalho (ex: Cliente XPTO)">
+                        <input type="text" id="newShortcutNome" placeholder="Nome do atalho">
                         <input type="text" id="newShortcutUrl" placeholder="https://... ou site.com">
                         <button id="addShortcutBtn">Salvar</button>
                     </div>
@@ -618,15 +684,14 @@
         `;
         container.innerHTML = html;
 
-        // Eventos da aba
+        // eventos de UI
         document.getElementById('renameTabBtn')?.addEventListener('click', () => {
-            const novoNome = prompt('Novo nome para a aba:', aba.nome);
-            if (novoNome && novoNome.trim()) renomearAba(aba.id, novoNome.trim());
+            const novoNome = prompt('Novo nome:', aba.nome);
+            if (novoNome?.trim()) renomearAba(aba.id, novoNome.trim());
         });
         document.getElementById('deleteTabBtn')?.addEventListener('click', () => {
-            if (confirm(`Remover a aba "${aba.nome}" e todos os atalhos?`)) deletarAba(aba.id);
+            if (confirm(`Remover aba "${aba.nome}"?`)) deletarAba(aba.id);
         });
-
         const filterInput = document.getElementById('filterShortcutsInput');
         if (filterInput) {
             filterInput.addEventListener('input', (e) => {
@@ -635,66 +700,147 @@
                 renderizarAbaAtivaConteudo();
             });
         }
-
         const addBtn = document.getElementById('addShortcutBtn');
         const nomeInp = document.getElementById('newShortcutNome');
         const urlInp = document.getElementById('newShortcutUrl');
         addBtn?.addEventListener('click', () => {
             const nomeVal = nomeInp.value.trim();
             const urlVal = urlInp.value.trim();
-            if (!nomeVal || !urlVal) {
-                alert('Preencha nome e URL do atalho');
-                return;
-            }
+            if (!nomeVal || !urlVal) { alert('Preencha ambos'); return; }
             adicionarAtalho(aba.id, nomeVal, urlVal);
             nomeInp.value = '';
             urlInp.value = '';
         });
 
-        // Eventos para os atalhos (abrir em nova aba)
+        // configuração de drag & drop nos itens da lista (reordenar)
         const lista = document.getElementById('shortcutsList');
-        if (lista) {
-            lista.querySelectorAll('.shortcut-item').forEach(item => {
-                const shortcutId = item.dataset.shortcutId;
-                const atalho = aba.shortcuts.find(s => s.id === shortcutId);
-                if (!atalho) return;
+        const itens = lista.querySelectorAll('.shortcut-item');
+        
+        itens.forEach(item => {
+            const shortcutId = item.dataset.shortcutId;
+            const atalhoReal = aba.shortcuts.find(s => s.id === shortcutId);
+            if (!atalhoReal) return;
 
-                // Clique no link (área do nome) abre em nova aba
+            // eventos de arrasto
+            item.addEventListener('dragstart', (e) => {
+                dragSource = {
+                    abaId: aba.id,
+                    shortcutId: shortcutId,
+                    indexOrigem: aba.shortcuts.findIndex(s => s.id === shortcutId)
+                };
+                e.dataTransfer.setData('text/plain', shortcutId);
+                e.dataTransfer.effectAllowed = 'move';
+                item.classList.add('dragging');
+            });
+            item.addEventListener('dragend', (e) => {
+                item.classList.remove('dragging');
+                dragSource = { abaId: null, shortcutId: null, indexOrigem: null };
+                // remover estilos de drop
+                itens.forEach(i => i.classList.remove('drop-before', 'drop-after'));
+            });
+            // permitir drop sobre item (para reordenar)
+            item.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                const targetItem = e.currentTarget;
+                const rect = targetItem.getBoundingClientRect();
+                const y = e.clientY - rect.top;
+                const meio = rect.height / 2;
+                itens.forEach(i => i.classList.remove('drop-before', 'drop-after'));
+                if (y < meio) {
+                    targetItem.classList.add('drop-before');
+                } else {
+                    targetItem.classList.add('drop-after');
+                }
+            });
+            item.addEventListener('dragleave', () => {
+                item.classList.remove('drop-before', 'drop-after');
+            });
+            item.addEventListener('drop', (e) => {
+                e.preventDefault();
+                itens.forEach(i => i.classList.remove('drop-before', 'drop-after'));
+                if (!dragSource.shortcutId || dragSource.abaId !== aba.id) {
+                    // se for de outra aba, não permitimos reordenar na lista de outra aba? Mas pode ser movido via aba button.
+                    // Se for de outra aba e soltar na lista, podemos mover para posição específica:
+                    if (dragSource.shortcutId && dragSource.abaId !== aba.id) {
+                        // mover atalho de outra aba para esta aba na posição indicada
+                        const targetItem = e.currentTarget;
+                        const targetShortcutId = targetItem.dataset.shortcutId;
+                        const targetIndex = aba.shortcuts.findIndex(s => s.id === targetShortcutId);
+                        const rect = targetItem.getBoundingClientRect();
+                        const y = e.clientY - rect.top;
+                        const meio = rect.height / 2;
+                        let novoIndex = targetIndex;
+                        if (y >= meio) novoIndex = targetIndex + 1;
+                        moverAtalhoParaAba(dragSource.shortcutId, dragSource.abaId, aba.id, novoIndex);
+                        dragSource = { abaId: null, shortcutId: null, indexOrigem: null };
+                        return;
+                    }
+                    return;
+                }
+                // reordenar na mesma aba
+                const targetItem = e.currentTarget;
+                const targetShortcutId = targetItem.dataset.shortcutId;
+                const targetIndex = aba.shortcuts.findIndex(s => s.id === targetShortcutId);
+                const rect = targetItem.getBoundingClientRect();
+                const y = e.clientY - rect.top;
+                const meio = rect.height / 2;
+                let novoIndex = targetIndex;
+                if (y >= meio) novoIndex = targetIndex + 1;
+
+                if (dragSource.indexOrigem !== undefined && dragSource.indexOrigem !== novoIndex) {
+                    const [movido] = aba.shortcuts.splice(dragSource.indexOrigem, 1);
+                    const ajuste = dragSource.indexOrigem < novoIndex ? novoIndex - 1 : novoIndex;
+                    aba.shortcuts.splice(ajuste, 0, movido);
+                    salvarDados();
+                    renderizarAbaAtivaConteudo();
+                }
+            });
+        });
+
+        // permitir drop na lista vazia (para mover atalho para essa aba)
+        if (lista && atalhosFiltrados.length === 0) {
+            lista.addEventListener('dragover', (e) => e.preventDefault());
+            lista.addEventListener('drop', (e) => {
+                e.preventDefault();
+                if (dragSource.shortcutId && dragSource.abaId !== aba.id) {
+                    moverAtalhoParaAba(dragSource.shortcutId, dragSource.abaId, aba.id, aba.shortcuts.length);
+                    dragSource = { abaId: null, shortcutId: null, indexOrigem: null };
+                }
+            });
+        }
+
+        // eventos de clique nos atalhos (abrir nova aba)
+        lista.querySelectorAll('.shortcut-item').forEach(item => {
+            const shortcutId = item.dataset.shortcutId;
+            const atalho = aba.shortcuts.find(s => s.id === shortcutId);
+            if (atalho) {
                 const linkDiv = item.querySelector('.shortcut-link');
                 linkDiv?.addEventListener('click', (e) => {
                     e.stopPropagation();
                     window.open(atalho.url, '_blank');
                 });
-
-                // Botão específico "abrir em nova guia"
-                const newTabBtn = item.querySelector('.open-newtab');
-                newTabBtn?.addEventListener('click', (e) => {
+                const openBtn = item.querySelector('.open-newtab');
+                openBtn?.addEventListener('click', (e) => {
                     e.stopPropagation();
                     window.open(atalho.url, '_blank');
                 });
-
-                // Editar atalho
                 const editBtn = item.querySelector('.edit-shortcut');
                 editBtn?.addEventListener('click', (e) => {
                     e.stopPropagation();
                     const novoNome = prompt('Editar nome:', atalho.nome);
                     const novaUrl = prompt('Editar URL:', atalho.url);
-                    if (novoNome || novaUrl) {
-                        editarAtalho(aba.id, atalho.id, novoNome || atalho.nome, novaUrl || atalho.url);
-                    }
+                    if (novoNome || novaUrl) editarAtalho(aba.id, atalho.id, novoNome || atalho.nome, novaUrl || atalho.url);
                 });
-
-                // Deletar atalho
                 const delBtn = item.querySelector('.delete-shortcut');
                 delBtn?.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    if (confirm(`Remover atalho "${atalho.nome}"?`)) removerAtalho(aba.id, atalho.id);
+                    if (confirm(`Remover "${atalho.nome}"?`)) removerAtalho(aba.id, atalho.id);
                 });
-            });
-        }
+            }
+        });
     }
 
-    // Busca Global (pesquisa em todos atalhos)
     function renderBuscaGlobal(termo) {
         const resultsDiv = document.getElementById('globalResults');
         if (!termo.trim()) {
@@ -712,72 +858,44 @@
             }
         }
         if (resultados.length === 0) {
-            resultsDiv.innerHTML = '<div style="padding: 10px; color: #94a3b8;">Nenhum atalho encontrado 😕</div>';
+            resultsDiv.innerHTML = '<div style="padding: 10px;">Nenhum atalho encontrado</div>';
             resultsDiv.classList.add('show');
             return;
         }
         resultsDiv.innerHTML = resultados.map(res => `
             <div class="result-item" data-url="${escapeHtml(res.atalho.url)}" data-shortcut-name="${escapeHtml(res.atalho.nome)}">
-                <div class="result-info">
-                    <strong>${escapeHtml(res.atalho.nome)}</strong> 
-                    <span>📁 ${escapeHtml(res.abaNome)}</span><br>
-                    <!-- URL oculta nos resultados também não é mostrada ao usuário -->
-                </div>
+                <div class="result-info"><strong>${escapeHtml(res.atalho.nome)}</strong> <span>📁 ${escapeHtml(res.abaNome)}</span></div>
                 <div class="result-action">Abrir →</div>
             </div>
         `).join('');
         resultsDiv.classList.add('show');
-
         document.querySelectorAll('.result-item').forEach(el => {
-            el.addEventListener('click', (e) => {
+            el.addEventListener('click', () => {
                 const url = el.dataset.url;
-                if (url) {
-                    window.open(url, '_blank');
-                    // feedback rápido
-                    const msgDiv = document.createElement('div');
-                    msgDiv.textContent = `🔗 Abrindo: ${el.dataset.shortcutName || 'link'} em nova aba`;
-                    msgDiv.style.position = 'fixed'; msgDiv.style.bottom = '20px'; msgDiv.style.right = '20px';
-                    msgDiv.style.backgroundColor = '#0f172a'; msgDiv.style.color = 'white'; msgDiv.style.padding = '8px 16px'; msgDiv.style.borderRadius = '40px'; msgDiv.style.zIndex = '999';
-                    document.body.appendChild(msgDiv);
-                    setTimeout(() => msgDiv.remove(), 1500);
-                }
+                if (url) window.open(url, '_blank');
             });
         });
     }
 
     function renderizarInterface() {
         renderizarAbasHeader();
-        if (activeTabId && abas.find(a => a.id === activeTabId)) {
-            renderizarAbaAtivaConteudo();
-        } else if (abas.length > 0) {
-            activeTabId = abas[0].id;
-            renderizarAbaAtivaConteudo();
-        } else {
-            document.getElementById('tabContentContainer').innerHTML = '<div style="padding: 40px;">Clique em "+ Nova Aba" para começar.</div>';
-        }
-
+        if (activeTabId && abas.find(a => a.id === activeTabId)) renderizarAbaAtivaConteudo();
+        else if (abas.length) { activeTabId = abas[0].id; renderizarAbaAtivaConteudo(); }
+        else document.getElementById('tabContentContainer').innerHTML = '<div style="padding:40px;">Clique em + Nova Aba</div>';
         const searchGlobal = document.getElementById('globalSearchInput');
         if (searchGlobal) {
-            const currentVal = searchGlobal.value;
-            const newHandler = () => renderBuscaGlobal(searchGlobal.value);
-            searchGlobal.removeEventListener('input', newHandler);
-            searchGlobal.addEventListener('input', newHandler);
-            if (currentVal) renderBuscaGlobal(currentVal);
-            else renderBuscaGlobal('');
+            const handler = () => renderBuscaGlobal(searchGlobal.value);
+            searchGlobal.removeEventListener('input', handler);
+            searchGlobal.addEventListener('input', handler);
+            renderBuscaGlobal(searchGlobal.value);
         }
     }
 
     function escapeHtml(str) {
         if (!str) return '';
-        return str.replace(/[&<>]/g, function(m) {
-            if (m === '&') return '&amp;';
-            if (m === '<') return '&lt;';
-            if (m === '>') return '&gt;';
-            return m;
-        });
+        return str.replace(/[&<>]/g, m => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;' }[m] || m));
     }
 
-    // Inicialização
     carregarDados();
     renderizarInterface();
     window.addEventListener('beforeunload', () => salvarDados());
